@@ -306,7 +306,10 @@ convertAST logic constants =
       BinaryOp op left right -> [42, binaryOpToInt op] <> exprToIntRep cteMap left <> exprToIntRep cteMap right
       UnaryOp op operand -> [43, unaryOpToInt op] <> exprToIntRep cteMap operand
       TernaryOp cond thenExpr elseExpr -> [44] <> exprToIntRep cteMap cond <> exprToIntRep cteMap thenExpr <> exprToIntRep cteMap elseExpr
-      FunctionCall callerSpec args -> [45] <> callerSpecToIntRep cteMap callerSpec <> concatMap (exprToIntRep cteMap) args
+      FunctionCall callerSpec args -> [45]
+          <> callerSpecToIntRep cteMap callerSpec
+          <> [ fromIntegral . length $ args ]
+          <> concatMap (exprToIntRep cteMap) args
       ArrayAccess array expr -> [46] <> exprToIntRep cteMap array <> exprToIntRep cteMap expr
       ArrayLiteral exprs -> [47] <> concatMap (exprToIntRep cteMap) exprs
       Parenthesized exprs -> [48] <> concatMap (exprToIntRep cteMap) exprs
@@ -320,7 +323,7 @@ convertAST logic constants =
       MemberAccess expr accessMode -> [53] <> exprToIntRep cteMap expr
           <> accessModeToIntRep cteMap accessMode
       MemberCall expr accessMode exprs -> [54] <> exprToIntRep cteMap expr
-            <> accessModeToIntRep cteMap accessMode <> concatMap (exprToIntRep cteMap) exprs
+          <> accessModeToIntRep cteMap accessMode <> concatMap (exprToIntRep cteMap) exprs
       Conditional cond thenExpr elseExpr -> [55] <> exprToIntRep cteMap cond <> exprToIntRep cteMap thenExpr <> exprToIntRep cteMap elseExpr
       Casting anID expr -> [56, fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap] <> exprToIntRep cteMap expr
       ObjectCreation accessMode exprs -> [57] <> accessModeToIntRep cteMap accessMode <> concatMap (exprToIntRep cteMap) exprs
