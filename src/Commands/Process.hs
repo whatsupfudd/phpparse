@@ -69,7 +69,7 @@ processCmd (aPath, mbVersion) rtOpts = do
 processFile :: FilePath -> IO ()
 processFile fPath = do
   sourceCode <- Bs.readFile fPath
-  rezA <- tsParsePhp fPath
+  rezA <- tsParsePhp False fPath
   case rezA of
     Left err -> putStrLn $ "@[processFile] error parsing file: " <> fPath <> " - " <> show err
     Right phpContext -> printPhpContext sourceCode phpContext
@@ -107,7 +107,7 @@ registerFile dbPool versionID folderID rootPath dirPath fileItem = do
       let
         fullPath = rootPath </> dirPath </> fileItemName
       startTime <- getCurrentTime
-      parseRez <- tsParsePhp fullPath
+      parseRez <- tsParsePhp False fullPath
       endTime <- getCurrentTime
       let
         duration = diffUTCTime endTime startTime
@@ -170,7 +170,7 @@ compactText sourceFile contentDemands = do
                       prefix <> "\n" <> postfix
         | otherwise = let
                         prefix = Bs.drop startCol (cLines V.! startLine)
-                        middle = V.foldl (\acc x -> acc <> "\n" <> x) "" (V.slice (succ startLine) (endLine - startLine) cLines)
+                        middle = V.foldl (\acc x -> acc <> "\n" <> x) "" (V.slice (succ startLine) (endLine - startLine - 1) cLines)
                         postfix = Bs.take endCol (cLines V.! endLine)
                       in
                       prefix <> middle <> "\n" <> postfix
@@ -269,7 +269,7 @@ convertAST logic constants =
       -- Function definition:
       FunctionDefST qualifiedName action ->
         let
-          qualInd = []
+          qualInd = qualNameToIntRep cteMap qualifiedName
         in
         [24] <> qualInd <> actionToIntRep cteMap action
       -- Class: attributes, modifiers, name, extends, implements, members
