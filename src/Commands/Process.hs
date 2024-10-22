@@ -160,15 +160,20 @@ compactText sourceFile contentDemands = do
                           middle = if endLine == succ startLine then
                               ""
                             else
-                              V.foldl (\acc x -> acc <> "\n" <> x) "" (V.slice startLine (endLine - startLine - 1) cLines)
+                              V.foldl (\acc x -> acc <> "\n" <> x) "" (V.slice (succ startLine) (endLine - startLine - 1) cLines)
                         in
                         prefix <> middle
+        | succ startLine == endLine = let
+                        prefix = Bs.drop startCol (cLines V.! startLine)
+                        postfix = Bs.take endCol (cLines V.! endLine)
+                      in
+                      prefix <> "\n" <> postfix
         | otherwise = let
                         prefix = Bs.drop startCol (cLines V.! startLine)
                         middle = V.foldl (\acc x -> acc <> "\n" <> x) "" (V.slice (succ startLine) (endLine - startLine) cLines)
-                        postfix = Bs.drop endCol (cLines V.! endLine)
+                        postfix = Bs.take endCol (cLines V.! endLine)
                       in
-                      prefix <> middle <> postfix
+                      prefix <> middle <> "\n" <> postfix
     in
     (fromIntegral lineNum, mainText)
 
@@ -178,8 +183,9 @@ convertAST logic constants =
   let
     byUser = Mp.fromList $ concatMap (\(k, (lineText, users)) -> [(u, k) | u <- users]) (Mp.toList constants)
     intRep = V.map (actionToIntRep byUser) logic
+    makeList = V.fromList . map (runPut . putInt32be)
   in
-  Bsl.toStrict . Bsl.concat . V.toList $ V.concatMap (V.fromList . map (runPut . putInt32be)) intRep
+  Bsl.toStrict . Bsl.concat . V.toList $ V.concatMap makeList intRep
   where
   actionToIntRep :: Mp.Map Int32 Int32 -> PhpAction -> [Int32]
   actionToIntRep cteMap actions =
@@ -188,20 +194,29 @@ convertAST logic constants =
       Statement aStmt -> statementToIntRep cteMap aStmt
       CommentA anID -> [2, fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap]
       MiscST aStr (startPos, endPos) -> [3, fromIntegral startPos.pointRow, fromIntegral startPos.pointColumn, fromIntegral endPos.pointRow, fromIntegral endPos.pointColumn]
-      Interpolation subActions -> concatMap (actionToIntRep cteMap) subActions
+      Interpolation subActions ->
+        let
+          -- Only count the non-NoOpAct sub-actions
+          nbrSubActions = foldl (\acc sa -> acc + case sa of NoOpAct -> 0; _ -> 1) 0 subActions
+        in
+        [87, fromIntegral nbrSubActions] <> concatMap (actionToIntRep cteMap) subActions
       NoOpAct -> []
+
+
+  -- maxID: 86
 
 
   statementToIntRep :: Mp.Map Int32 Int32 -> PhpStatement -> [Int32]
   statementToIntRep cteMap stmt =
     case stmt of
-      BlockST actions -> concatMap (actionToIntRep cteMap) actions
+      BlockST actions ->
+        [86, fromIntegral . length $ actions] <> concatMap (actionToIntRep cteMap) actions
       -- named label:
       NamedLabelST -> [4]
       -- Expression:
       ExpressionST expr -> [5] <> exprToIntRep cteMap expr
       -- If:
-      IfST cond thenBranch mbElseBranch -> [if isNothing mbElseBranch then 6 else 7] 
+      IfST cond thenBranch mbElseBranch -> [if isNothing mbElseBranch then 6 else 7]
         <> exprToIntRep cteMap cond <> actionToIntRep cteMap thenBranch
         <> case mbElseBranch of
             Nothing -> []
@@ -231,7 +246,7 @@ convertAST logic constants =
       -- Break:
       BreakST -> [15]
       -- Return:
-      ReturnST mbExpr -> [16]
+      ReturnST mbExpr -> [if isNothing mbExpr then 16 else 85]
           <> case mbExpr of
               Nothing -> []
               Just expr -> exprToIntRep cteMap expr
@@ -240,7 +255,8 @@ convertAST logic constants =
       -- Declare:
       DeclareST -> [18]
       -- Echo:
-      EchoST exprs -> [19] <> concatMap (exprToIntRep cteMap) exprs
+      EchoST exprs ->
+        [19, fromIntegral . length $ exprs] <> concatMap (exprToIntRep cteMap) exprs
       -- Exit:
       ExitST mbExpr -> [if isNothing mbExpr then 20 else 21]
           <> case mbExpr of
@@ -266,9 +282,8 @@ convertAST logic constants =
             Nothing -> 0
             Just aQualName -> 0
           implIDs = [0]    -- length, IDs
-
         in
-        [25] <> [nameID, extendID] <> implIDs <> concatMap (memberToIntRep cteMap) clMembers
+        [25, fromIntegral . length $ clMembers] <> [nameID, extendID] <> implIDs <> concatMap (memberToIntRep cteMap) clMembers
       -- Interface:
       InterfaceDefST -> [26]
       -- Trait:
@@ -306,13 +321,12 @@ convertAST logic constants =
       BinaryOp op left right -> [42, binaryOpToInt op] <> exprToIntRep cteMap left <> exprToIntRep cteMap right
       UnaryOp op operand -> [43, unaryOpToInt op] <> exprToIntRep cteMap operand
       TernaryOp cond thenExpr elseExpr -> [44] <> exprToIntRep cteMap cond <> exprToIntRep cteMap thenExpr <> exprToIntRep cteMap elseExpr
-      FunctionCall callerSpec args -> [45]
+      FunctionCall callerSpec args -> [45, fromIntegral . length $ args]
           <> callerSpecToIntRep cteMap callerSpec
-          <> [ fromIntegral . length $ args ]
           <> concatMap (exprToIntRep cteMap) args
       ArrayAccess array expr -> [46] <> exprToIntRep cteMap array <> exprToIntRep cteMap expr
-      ArrayLiteral exprs -> [47] <> concatMap (exprToIntRep cteMap) exprs
-      Parenthesized exprs -> [48] <> concatMap (exprToIntRep cteMap) exprs
+      ArrayLiteral exprs -> [47, fromIntegral . length $ exprs] <> concatMap (exprToIntRep cteMap) exprs
+      Parenthesized exprs -> [48, fromIntegral . length $ exprs] <> concatMap (exprToIntRep cteMap) exprs
       AssignVar posFlag left right -> [49] <> [if posFlag then 1 else 0] <> exprToIntRep cteMap left <> exprToIntRep cteMap right
       CommentX anID -> [50, fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap]
       MiscExpr aStr (startPos, endPos) -> [51, fromIntegral startPos.pointRow, fromIntegral startPos.pointColumn, fromIntegral endPos.pointRow, fromIntegral endPos.pointColumn]
@@ -322,19 +336,19 @@ convertAST logic constants =
               Just subExpr -> exprToIntRep cteMap subExpr
       MemberAccess expr accessMode -> [53] <> exprToIntRep cteMap expr
           <> accessModeToIntRep cteMap accessMode
-      MemberCall expr accessMode exprs -> [54] <> exprToIntRep cteMap expr
+      MemberCall expr accessMode exprs -> [54, fromIntegral . length $ exprs] <> exprToIntRep cteMap expr
           <> accessModeToIntRep cteMap accessMode <> concatMap (exprToIntRep cteMap) exprs
       Conditional cond thenExpr elseExpr -> [55] <> exprToIntRep cteMap cond <> exprToIntRep cteMap thenExpr <> exprToIntRep cteMap elseExpr
       Casting anID expr -> [56, fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap] <> exprToIntRep cteMap expr
-      ObjectCreation accessMode exprs -> [57] <> accessModeToIntRep cteMap accessMode <> concatMap (exprToIntRep cteMap) exprs
+      ObjectCreation accessMode exprs -> [57, fromIntegral . length $ exprs] <> accessModeToIntRep cteMap accessMode <> concatMap (exprToIntRep cteMap) exprs
       Include inclMode expr -> [58, includeModeToIntRep inclMode] <> exprToIntRep cteMap expr
       AugmentedAssign left op right -> [59] <> exprToIntRep cteMap left <> [ binaryOpToInt op ] <> exprToIntRep cteMap right
-      ScopeCall scopeModes exprs -> [60, fromIntegral . length $ scopeModes]
-          <> concatMap (scopeModeToIntRep cteMap) scopeModes 
+      ScopeCall scopeModes exprs -> [60, fromIntegral . length $ scopeModes, fromIntegral . length $ exprs]
+          <> concatMap (scopeModeToIntRep cteMap) scopeModes
           <> concatMap (exprToIntRep cteMap) exprs
       ScopedPropertyAccess scopeMode expr -> [61] <> scopeModeToIntRep cteMap scopeMode <> exprToIntRep cteMap expr
       ErrorSuppression expr -> [62] <> exprToIntRep cteMap expr
-      ListLiteral exprs -> [63] <> concatMap (exprToIntRep cteMap) exprs
+      ListLiteral exprs -> [63, fromIntegral . length $ exprs] <> concatMap (exprToIntRep cteMap) exprs
       HereDoc startLine startCol endLine -> [64, fromIntegral startLine, fromIntegral startCol, fromIntegral endLine]
       ClassConstantAccess scopeMode anID -> [65] <> scopeModeToIntRep cteMap scopeMode
           <> [fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap]
@@ -349,8 +363,8 @@ convertAST logic constants =
   memberToIntRep cteMap mbrDecl =
     case mbrDecl of
       CommentCDecl anID -> [66, fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap]
-      ConstantCDecl mods exprs -> [67]
-          <> concatMap (\(anID, anExpr) -> 
+      ConstantCDecl mods exprs -> [67, fromIntegral . length $ exprs]
+          <> concatMap (\(anID, anExpr) ->
                 [fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap]
                 <> exprToIntRep cteMap anExpr
              ) exprs
@@ -364,7 +378,7 @@ convertAST logic constants =
               Just attrList -> [0]  -- bits for attributes
       ConstructorCDecl -> [70]
       DestructorCDecl -> [71]
-      TraitUseCDecl impls mbUseList -> [72]
+      TraitUseCDecl impls mbUseList -> [72, fromIntegral . length $ impls]
           <> map (\anID -> fromMaybe 0 $ Mp.lookup (fromIntegral anID) cteMap) impls
           <> case mbUseList of
               Nothing -> [0]
@@ -443,7 +457,7 @@ convertAST logic constants =
   updateOpToInt op = case op of
     IncOp -> 0
     DecOp -> 1
-  
+
   scopeModeToIntRep :: Mp.Map Int32 Int32 -> ScopeMode -> [Int32]
   scopeModeToIntRep cteMap scopeMode = case scopeMode of
     RelativeSelfSM -> [0]
@@ -463,11 +477,17 @@ convertAST logic constants =
       StringLiteral flag strDetails -> [83, if flag then 1 else 0] <> stringDetailsToIntRep cteMap strDetails
       NullLiteral -> [84]
 
+
   stringDetailsToIntRep :: Mp.Map Int32 Int32 -> StringDetails -> [Int32]
   stringDetailsToIntRep cteMap strDetails =
-    case strDetails of
-      SimpleString encModes -> [1] <> concatMap (encapsedModeToIntRep cteMap) encModes
-      EncapsedString encModes -> [2] <> concatMap (encapsedModeToIntRep cteMap) encModes
+    let
+      (intDetails, encModes) =
+        case strDetails of
+          SimpleString modes -> (1, modes)
+          EncapsedString modes -> (2, modes)
+    in
+    [ intDetails, fromIntegral . length $ encModes] <> concatMap (encapsedModeToIntRep cteMap) encModes
+
 
   encapsedModeToIntRep :: Mp.Map Int32 Int32 -> EncapsedMode -> [Int32]
   encapsedModeToIntRep cteMap encMode =
